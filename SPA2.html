@@ -2,7 +2,8 @@
 <html lang="es" class="dark">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-    <title>App AdminHCM</title>
+    <title>Datos - SPA2
+    </title>
     <script src="https://cdn.tailwindcss.com"></script><script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
@@ -857,124 +858,172 @@
         }
     }
 
-    function renderTable(data) {
-        const container = document.getElementById('data-table-container');
-        if (!container) return;
-        
-        container.innerHTML = `<table id="main-table"><thead><tr id="table-header"></tr></thead><tbody id="table-body"></tbody></table>`;
-        
-        const tableHeader = document.getElementById('table-header');
-        const tableBody = document.getElementById('table-body');
-        const configMap = JSON.parse(localStorage.getItem('TABLE_CONFIG') || '{}');
+function renderTable(data) {
+    const container = document.getElementById('data-table-container');
+    if (!container) return;
 
-        // Numeración
-        const thId = document.createElement('th');
-        thId.className = 'sticky-id-cell';
-        thId.innerHTML = '<span>#</span>';
-        tableHeader.appendChild(thId);
+    // 1. LIMPIEZA E INICIALIZACIÓN
+    container.innerHTML = `<table id="main-table"><thead><tr id="table-header"></tr></thead><tbody id="table-body"></tbody></table>`;
 
-        // 1. ENCABEZADOS
+    const tableHeader = document.getElementById('table-header');
+    const tableBody = document.getElementById('table-body');
+    const configMap = JSON.parse(localStorage.getItem('TABLE_CONFIG') || '{}');
+    const tableDataStorage = JSON.parse(localStorage.getItem('TABLE_DATA') || '{}');
+
+    // 2. IDENTIFICACIÓN DINÁMICA DE PREFIJO Y CAMPOS ESPECIALES
+    const tablaOrigen = tableDataStorage.TABLA_ORIGEN || "";
+    const prefix = tablaOrigen.split('_')[0]; // Extrae "TD101", "TD102", etc.
+    const typeRegField = `${prefix}TYPEREG`;  // Campo oculto para estado de bloqueo
+    
+    // Definición del campo 'f' para duplicados según la tabla
+    let f = "";
+    if (tablaOrigen.includes("TD101")) {
+        f = "TD101FACTURA";
+    } else if (tablaOrigen.includes("TD102")) {
+        f = "TD102POLIZA";
+    }
+
+    // 3. CONTEO PREVIO PARA DUPLICADOS
+    const counts = {};
+    if (f) {
+        data.forEach(row => {
+            const val = String(row[f] || "").trim().toUpperCase();
+            if (val !== "" && val !== "0") {
+                counts[val] = (counts[val] || 0) + 1;
+            }
+        });
+    }
+
+    // 4. GENERACIÓN DE ENCABEZADOS
+    const thId = document.createElement('th');
+    thId.className = 'sticky-id-cell';
+    thId.innerHTML = '<span>#</span>';
+    tableHeader.appendChild(thId);
+
+    tableConfig.columnOrder.forEach(h => {
+        const cleanH = h.toUpperCase();
+        const cfg = configMap[h] || {};
+        
+        if (String(cfg.visible || '').toLowerCase() !== 'x' && String(cfg.visible || '').toLowerCase() !== 'xx') return;
+        if (cleanH.endsWith('TYPEREG') || cleanH.endsWith('DESCRIPCION') || cleanH.endsWith('ARCHIVO')) return;
+
+        const colFilterObj = currentHeadersConfig.find(c => c.id === h);
+        const hasActiveFilter = colFilterObj && colFilterObj.filterValue && colFilterObj.filterValue.trim() !== "";
+        
+        let filterIndicator = hasActiveFilter ? `
+            <span class="relative inline-flex items-center justify-center h-4 w-4 ml-1 flex-shrink-0">
+                <span class="animate-ping absolute inset-0 rounded-full bg-red-400 opacity-75"></span>
+                <span class="relative flex items-center justify-center rounded-full h-3.5 w-3.5 bg-red-600 text-[9px] font-bold text-white cursor-help shadow-sm leading-none">f</span>
+            </span>` : '';
+
+        const th = document.createElement('th');
+        th.className = "py-3 px-3 min-w-[100px] align-middle border-b border-gray-700 select-none cursor-pointer group text-center";
+
+        const iconName = sortConfig.key === h ? (sortConfig.direction === 'desc' ? 'chevron-down' : 'chevron-up') : 'chevrons-up-down';
+
+        th.innerHTML = `
+            <div class="flex items-center justify-center gap-2 w-full leading-tight">
+                <div class="w-4 h-4 flex-shrink-0 opacity-0 hidden sm:block"></div>
+                <div class="flex items-center min-w-0">
+                    <span class="font-semibold uppercase tracking-wider text-[13px] text-blue-500 font-bold group-hover:whitespace-normal truncate">
+                        ${tableConfig.displayMap[h] || h}
+                    </span>
+                    ${filterIndicator}
+                </div>
+                <div class="flex items-center justify-start w-4 h-4 flex-shrink-0">
+                    <i data-lucide="${iconName}" class="w-4 h-4 ${sortConfig.key === h ? 'text-blue-400 opacity-100' : 'opacity-30 group-hover:opacity-100'} transition-all"></i>
+                </div>
+            </div>`;
+
+        th.onclick = () => handleSort(h);
+        tableHeader.appendChild(th);
+    });
+
+    // 5. GENERACIÓN DE FILAS
+    data.forEach((row, idx) => {
+        const tr = document.createElement('tr');
+        
+        // Verificación de duplicidad para el estilo de fila
+        const valorF = f ? String(row[f] || "").trim().toUpperCase() : "";
+        const esDuplicado = f && counts[valorF] > 1;
+
+        if (esDuplicado) {
+            tr.className = 'cursor-pointer bg-amber-950/30 hover:bg-amber-900/40 text-amber-400 transition-colors group border-b border-amber-800/20';
+        } else {
+            tr.className = 'cursor-pointer hover:bg-blue-500/10 transition-colors group border-b border-gray-700/50';
+        }
+
+        tr.ondblclick = () => {
+            const tableDataStorageUpdate = { TABLA_ORIGEN: currentTableName, IS_NEW: false, DATOS_REGISTRO: row };
+            localStorage.setItem('TABLE_DATA', JSON.stringify(tableDataStorageUpdate));
+            if (typeof openDetailModal === 'function') openDetailModal(row);
+        };
+
+        const tdIdx = document.createElement('td');
+        tdIdx.className = 'sticky-id-cell text-center text-[13px] text-blue-500 font-medium';
+        tdIdx.textContent = idx + 1;
+        tr.appendChild(tdIdx);
+
         tableConfig.columnOrder.forEach(h => {
-            const cleanH = h.toUpperCase();
             const cfg = configMap[h] || {};
-            if (String(cfg.visible || '').toLowerCase() !== 'x' && String(cfg.visible || '').toLowerCase() !== 'xx') return; 
+            const cleanH = h.toUpperCase();
+
+            if (String(cfg.visible || '').toLowerCase() !== 'x' && String(cfg.visible || '').toLowerCase() !== 'xx') return;
             if (cleanH.endsWith('TYPEREG') || cleanH.endsWith('DESCRIPCION') || cleanH.endsWith('ARCHIVO')) return;
 
-            const colFilterObj = currentHeadersConfig.find(c => c.id === h);
-            const hasActiveFilter = colFilterObj && colFilterObj.filterValue && colFilterObj.filterValue.trim() !== "";
-            
-            let filterIndicator = hasActiveFilter ? `
-                <span class="relative inline-flex items-center justify-center h-4 w-4 ml-1 flex-shrink-0">
-                    <span class="animate-ping absolute inset-0 rounded-full bg-red-400 opacity-75"></span>
-                    <span class="relative flex items-center justify-center rounded-full h-3.5 w-3.5 bg-red-600 text-[9px] font-bold text-white cursor-help shadow-sm leading-none">f</span>
-                </span>` : '';
+            const td = document.createElement('td');
+            td.className = `px-3 py-1 text-[12px] font-bold ${esDuplicado ? '' : 'text-gray-300'}`;
 
-            const th = document.createElement('th');
-            th.className = "py-3 px-3 min-w-[100px] align-middle border-b border-gray-700 select-none cursor-pointer group text-center"; 
-            
-            const iconName = sortConfig.key === h ? (sortConfig.direction === 'desc' ? 'chevron-down' : 'chevron-up') : 'chevrons-up-down';
-
-            th.innerHTML = `
-                <div class="flex items-center justify-center gap-2 w-full leading-tight">
-                    <div class="w-4 h-4 flex-shrink-0 opacity-0 hidden sm:block"></div>
-                    <div class="flex items-center min-w-0">
-                        <span class="font-semibold uppercase tracking-wider text-[13px] text-blue-500 font-bold group-hover:whitespace-normal truncate">
-                            ${tableConfig.displayMap[h] || h}
-                        </span>
-                        ${filterIndicator}
-                    </div>
-                    <div class="flex items-center justify-start w-4 h-4 flex-shrink-0">
-                        <i data-lucide="${iconName}" class="w-4 h-4 ${sortConfig.key === h ? 'text-blue-400 opacity-100' : 'opacity-30 group-hover:opacity-100'} transition-all"></i>
-                    </div>
-                </div>`;
-                
-            th.onclick = () => handleSort(h);
-            tableHeader.appendChild(th);
-        });
-
-        // 2. FILAS
-        data.forEach((row, idx) => {
-            const tr = document.createElement('tr');
-            tr.className = 'cursor-pointer hover:bg-blue-500/10 transition-colors group border-b border-gray-700/50';
-            
-            tr.ondblclick = () => {
-                const tableDataStorage = { TABLA_ORIGEN: currentTableName, IS_NEW: false, DATOS_REGISTRO: row };
-                localStorage.setItem('TABLE_DATA', JSON.stringify(tableDataStorage));
-                if (typeof openDetailModal === 'function') openDetailModal(row);
-            };
-
-            const tdIdx = document.createElement('td');
-            tdIdx.className = 'sticky-id-cell text-center text-[13px] text-blue-500 font-medium';
-            tdIdx.textContent = idx + 1;
-            tr.appendChild(tdIdx);
-
-            tableConfig.columnOrder.forEach(h => {
-                const cfg = configMap[h] || {};
-                const cleanH = h.toUpperCase();
-                
-                if (String(cfg.visible || '').toLowerCase() !== 'x' && String(cfg.visible || '').toLowerCase() !== 'xx') return;
-                if (cleanH.endsWith('TYPEREG') || cleanH.endsWith('DESCRIPCION') || cleanH.endsWith('ARCHIVO')) return;
-
-                const td = document.createElement('td');
-                td.className = 'px-3 py-1 text-[12px] text-gray-300 font-bold';
-                
-                // Alineación desde Configuración
-                const alignment = (cfg.align || '').toLowerCase().trim();
-                
-                if (['left', 'center', 'right'].includes(alignment)) {
-                    td.style.textAlign = alignment;
+            // Alineación
+            const alignment = (cfg.align || '').toLowerCase().trim();
+            if (['left', 'center', 'right'].includes(alignment)) {
+                td.style.textAlign = alignment;
+            } else {
+                if (cleanH.includes('IMPORTE') || cleanH.includes('MONTO')) {
+                    td.style.textAlign = 'right';
+                } else if (cleanH.includes('FECHA') || cleanH.includes('DATE') || cleanH.endsWith('NUMERO')) {
+                    td.style.textAlign = 'center';
                 } else {
-                    // Fallback automático
-                    if (cleanH.includes('IMPORTE') || cleanH.includes('MONTO')) {
-                        td.style.textAlign = 'right';
-                    } else if (cleanH.includes('FECHA') || cleanH.includes('DATE') || cleanH.endsWith('NUMERO')) {
-                        td.style.textAlign = 'center';
-                    } else {
-                        td.style.textAlign = 'left';
-                    }
+                    td.style.textAlign = 'left';
                 }
-                
-                // Lógica de Formato
-                let val = getFormattedValue(h, row[h]);
+            }
 
-                // Formateo específico de Fecha
-                if (cleanH.includes('FECHA') || cleanH.includes('DATE')) {
-                    const d = new Date(row[h]);
-                    if (!isNaN(d.getTime())) {
-                        val = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-                    }
+            // Obtención de valor base
+            let val = getFormattedValue(h, row[h]);
+
+            // --- MEJORA: LÓGICA DE BLOQUEO EN EL CAMPO ID ---
+            if (cleanH.endsWith('ID')) {
+                const status = String(row[typeRegField] || "").trim().toUpperCase();
+                if (status === "BLOQUEADO") {
+                    val = `🚫 ${val}`;
+                    td.classList.add('text-red-500/80'); // Toque sutil de rojo para reforzar el bloqueo
                 }
+            }
 
+            // Formateo de Fechas
+            if (cleanH.includes('FECHA') || cleanH.includes('DATE')) {
+                const d = new Date(row[h]);
+                if (!isNaN(d.getTime())) {
+                    val = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+                }
+            }
+
+            // Renderizado final (Duplicado vs Normal)
+            if (h === f && esDuplicado) {
+                td.innerHTML = `<span class="bg-amber-500/20 px-1 rounded border border-amber-500/30">⚠️ ${val}</span>`;
+            } else {
                 td.innerHTML = highlightText(val, currentSearchTerm);
-                tr.appendChild(td);
-            }); // Aquí terminaba prematuramente antes
-            
-            tableBody.appendChild(tr);
+            }
+
+            tr.appendChild(td);
         });
 
-        if (typeof updateMetrics === 'function') updateMetrics(); 
-        if (window.lucide) lucide.createIcons();
-    }
+        tableBody.appendChild(tr);
+    });
+
+    if (typeof updateMetrics === 'function') updateMetrics();
+    if (window.lucide) lucide.createIcons();
+}
 
     // FUNCIONES AUXILIARES FINALES
     function activateButtonVisuals(btn) {
