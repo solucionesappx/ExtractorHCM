@@ -661,11 +661,14 @@
         const tablasSinMetricas = ["TD102_POLIZAS", "TD201_MAIN", "TD999_BORRADOS"];
         const debeOcultar = tablasSinMetricas.includes(tableName);
         
+        // --- MEJORA EN BLOQUE CACHÉ ---
         if (!needsRefresh && 
             TABLE_CACHE.tableName === tableName && 
             (now - TABLE_CACHE.timestamp) < CACHE_DURATION && 
             TABLE_CACHE.data) {
             
+            currentTableName = tableName; 
+            localStorage.setItem('TABLE_DATA', JSON.stringify({ TABLA_ORIGEN: tableName }));
             renderTable(TABLE_CACHE.data);
             updateStatusTag(tableName);
             return;
@@ -682,7 +685,7 @@
 
         const userTienda = localStorage.getItem(KEYS.TIENDA) || 'DEFAULT';
         const tiendaId = localStorage.getItem(KEYS.TIENDA_ID); 
-        const usuarioId = localStorage.getItem('Usuario_ID'); // ID crítico para el filtro
+        const usuarioId = localStorage.getItem('Usuario_ID'); 
         const perfil = localStorage.getItem(KEYS.PERFIL);      
 
         const requestDiagnostic = {
@@ -703,16 +706,17 @@
             const res = await response.json();
 
             if (res.success) {
+                // --- MEJORA EN BLOQUE ÉXITO ---
                 currentTableName = tableName;
+                localStorage.setItem('TABLE_DATA', JSON.stringify({ TABLA_ORIGEN: tableName }));
+                
                 refreshNewButtonConfig();
                 
-                // Los datos ya vienen filtrados por el Backend (Seguridad)
                 originalData = res.data || [];
 
                 if (tableName === "TD102_POLIZAS") {
                     const usuarioLogueado = localStorage.getItem('Usuario_ID'); 
                     
-                    // Mapeo de ALIAS y validación de matriz
                     const matrizCuentasUsuario = originalData.map(row => {
                         const banco = (row.TD102BANCO || "").trim();
                         const tipo = (row.TD102TIPO || "").trim();
@@ -725,10 +729,8 @@
                         };
                     });
 
-                    // 1. Extraer solo los ALIAS únicos
                     const listaNuevosAlias = [...new Set(matrizCuentasUsuario.map(c => c.ALIAS))].sort();
 
-                    // 2. Comparar con el diccionario (Ya filtrado por el Backend)
                     const dictActual = res.dictionary ? res.dictionary.find(d => 
                         String(d.Usuario_Tienda_ID).trim() === String(usuarioLogueado).trim() &&
                         d.Nombre_Tabla === "TD101_MAIN"
@@ -745,7 +747,6 @@
                 
                     const hayCambios = JSON.stringify(listaNuevosAlias) !== JSON.stringify(aliasEnServidor);
 
-                    // 3. Exportación si hay cambios detectados
                     if (listaNuevosAlias.length > 0 && hayCambios) {
                         sincronizarAliasAlDiccionario(listaNuevosAlias);
                     }
@@ -753,7 +754,6 @@
                     localStorage.setItem('MATRIZ_CUENTAS_USUARIO', JSON.stringify(matrizCuentasUsuario));
                 }
 
-                // --- PROCESAMIENTO DE CONFIGURACIÓN Y VISIBILIDAD ---
                 const configArray = res.fullConfig || res.config || [];
                 rawConfig = configArray; 
 
@@ -786,7 +786,6 @@
                     tableConfig.alignMap[colKey] = item.Justificado_Campo || 'left';
                 });
 
-                // 4. Procesamiento del Diccionario Dinámico
                 if (res.dictionary) {
                     const dictionaryMap = {};
                     res.dictionary.forEach(item => {
@@ -800,7 +799,6 @@
                     localStorage.setItem('VALUE_DICTIONARY', JSON.stringify(dictionaryMap));
                 }
 
-                // 5. Caché Local y Renderizado Final
                 TABLE_CACHE = {
                     data: originalData,
                     config: mappedConfig,
@@ -812,7 +810,7 @@
                 localStorage.setItem('LAST_VISITED_TABLE', tableName);
             
                 tableConfig.columnOrder = res.columnOrder || (originalData.length > 0 ? Object.keys(originalData[0]) : []);
-                                                            
+                                                                            
                 updateStatusTag(tableName);
                 renderTable(originalData);
                 needsRefresh = false; 
@@ -823,22 +821,19 @@
 
             if (dataViewContainer) {
                 if (debeOcultar) {
-                    dataViewContainer.classList.add('hidden'); // Oculta metricas totalmente para tablas sin metricas
+                    dataViewContainer.classList.add('hidden'); 
                 } else {
-                    dataViewContainer.classList.remove('hidden'); // Muestra metricas para las demás
+                    dataViewContainer.classList.remove('hidden'); 
                 }
             }
 
-            // --- Control de estado del botón de transferencia ---
             if (btnTransfer) {
                 if (tableName === "TD101_MAIN") {
-                    // Estado Activo
                     btnTransfer.classList.remove('opacity-20', 'cursor-not-allowed', 'grayscale');
                     btnTransfer.classList.add('hover:scale-110', 'cursor-pointer');
                     btnTransfer.disabled = false;
                     btnTransfer.title = "Exportar Excel";
                 } else {
-                    // Estado Opaco y Bloqueado
                     btnTransfer.classList.add('opacity-20', 'cursor-not-allowed', 'grayscale');
                     btnTransfer.classList.remove('hover:scale-110', 'cursor-pointer');
                     btnTransfer.disabled = true;
@@ -870,11 +865,12 @@ function renderTable(data) {
     const tableDataStorage = JSON.parse(localStorage.getItem('TABLE_DATA') || '{}');
 
     // 2. IDENTIFICACIÓN DINÁMICA DE PREFIJO Y CAMPOS ESPECIALES
-    const tablaOrigen = tableDataStorage.TABLA_ORIGEN || "";
+    // MEJORA: Priorizamos currentTableName para evitar que la lógica se pierda al navegar
+    const tablaOrigen = currentTableName || tableDataStorage.TABLA_ORIGEN || "";
     const prefix = tablaOrigen.split('_')[0]; // Extrae "TD101", "TD102", etc.
     const typeRegField = `${prefix}TYPEREG`;  // Campo oculto para estado de bloqueo
     
-    // Definición del campo 'f' para duplicados según la tabla
+    // Definición del campo 'fieldDuplicate' para duplicados según la tabla
     let fieldDuplicate = "";
     if (tablaOrigen.includes("TD101")) {
         fieldDuplicate = "TD101FACTURA";
@@ -990,12 +986,12 @@ function renderTable(data) {
             // Obtención de valor base
             let val = getFormattedValue(h, row[h]);
 
-            // --- MEJORA: LÓGICA DE BLOQUEO EN EL CAMPO ID ---
+            // --- LÓGICA DE BLOQUEO EN EL CAMPO ID ---
             if (cleanH.endsWith('ID')) {
                 const status = String(row[typeRegField] || "").trim().toUpperCase();
                 if (status === "BLOQUEADO") {
                     val = `🚫 ${val}`;
-                    td.classList.add('text-red-500/80'); // Toque sutil de rojo para reforzar el bloqueo
+                    td.classList.add('text-red-500/80');
                 }
             }
 
