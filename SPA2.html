@@ -2234,7 +2234,7 @@ function showSystemModal({
             const key = input.dataset.field;
             const cleanKey = key.toUpperCase();
             const cfg = configMap[cleanKey] || {};
-            const isDate = cleanKey.includes('FECHA') || cleanKey.includes('DATE') || cleanKey.includes('PERIODO') || cleanKey.includes('EMISION') || cleanKey.includes('VIGENCIA');
+            const isDate = cleanKey.includes('FECHA') || cleanKey.includes('DATE') || cleanKey.includes('EMISION') || cleanKey.includes('VIGENCIA');
             
             // Excluimos TASAREF y MONTOML2 para que no sean tratados como strings editables
             const isNumeric = (cleanKey.includes('IMPORTE') || cleanKey.includes('MONTO') || cleanKey.includes('PRIMA')) && 
@@ -3388,7 +3388,7 @@ function showSystemModal({
                 "TD101MONEDA": "USD",
                 "TD101FACTURA": extractRaw(bloqueFactura, /Factura Nº:\s*(\d+)/),
                 "TD101FECHAEMISION": extractRaw(bloqueFactura, /Fecha de Emisión:\s*(\d{2}\/\d{2}\/\d{4})/),
-                "TD101FACTURAPERIODO": extractRaw(bloqueFactura, /Desde \(dd\/mm\/aaaa\):\s*(\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4})/)
+                "TD101PERIODOFACT": extractRaw(bloqueFactura, /Desde \(dd\/mm\/aaaa\):\s*(\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4})/)
                                         .trim().replace(/\s+/, " al "),
                 "TD101MOVIMIENTO": extractRaw(bloqueFactura, /Tipo de Movimiento:\s*([\s\S]*?)\s*DATOS DE LA FACTURA/),
                 "TD101MONTOPRIMA": extractRaw(bloqueFactura, /Total Prima Bruta:\s*(-?[\d.,]+)/),
