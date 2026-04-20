@@ -828,7 +828,7 @@
             }
 
             if (btnTransfer) {
-                if (tableName === "TD101_MAIN") {
+                if (tableName === "TD101_MAIN" || tableName === "TD201_MAIN") {
                     btnTransfer.classList.remove('opacity-20', 'cursor-not-allowed', 'grayscale');
                     btnTransfer.classList.add('hover:scale-110', 'cursor-pointer');
                     btnTransfer.disabled = false;
@@ -2304,18 +2304,41 @@ function showSystemModal({
             }
         });
 
-        // --- 3. LÓGICA DE CAMPOS CALCULADOS (TASAREF 5 dec / MONTOML2 2 dec) ---
-        const montoPagado = parseFloat(payload['TD101MONTOPAGADO']) || 0;
-        const montoPrima = parseFloat(payload['TD101MONTOPRIMA']) || 0;
-        const montoTotal = parseFloat(payload['TD101MONTOTOTAL']) || 0;
+        // --- 3. LÓGICA DE CAMPOS CALCULADOS DINÁMICA ---
+        
+        // 3.1. Detectar prefijo (TD101, TD201, etc.)
+        const firstKey = Object.keys(payload)[0] || "";
+        const prefix = firstKey.substring(0, 5).toUpperCase();
 
-        // Cálculo Tasa: Redondeo a 5 decimales
-        let tasaCalculada = montoPrima !== 0 ? (montoPagado / montoPrima) : 0;
-        payload['TD101TASAREF'] = Math.round(tasaCalculada * 100000) / 100000;
+        // 3.2. Determinar el campo divisor según la tabla
+        // SMED usa MONTOBRUTO, las demás (HCM, etc.) usan MONTOPRIMA
+        const campoDivisor = (prefix === 'TD201') ? `${prefix}MONTOBRUTO` : `${prefix}MONTOPRIMA`;
 
-        // Cálculo Monto ML2: Redondeo a 2 decimales
-        let ml2Calculado = payload['TD101TASAREF'] * montoTotal;
-        payload['TD101MONTOML2'] = Math.round(ml2Calculado * 100) / 100;
+        // 3.3. Extraer valores numéricos
+        const montoPagado = parseFloat(payload[`${prefix}MONTOPAGADO`]);
+        const valorDivisor = parseFloat(payload[campoDivisor]);
+        const montoTotal  = parseFloat(payload[`${prefix}MONTOTOTAL`]);
+
+        // 3.4. Ejecutar cálculos si los valores necesarios existen
+        if (!isNaN(montoPagado) && !isNaN(valorDivisor) && valorDivisor !== 0) {
+            
+            // Cálculo Tasa: Redondeo a 5 decimales
+            const tasaCalculada = montoPagado / valorDivisor;
+            payload[`${prefix}TASAREF`] = Math.round(tasaCalculada * 100000) / 100000;
+
+            // Cálculo Monto ML2: Redondeo a 2 decimales
+            if (!isNaN(montoTotal)) {
+                const ml2Calculado = payload[`${prefix}TASAREF`] * montoTotal;
+                payload[`${prefix}MONTOML2`] = Math.round(ml2Calculado * 100) / 100;
+            }
+            
+            console.log(`%c🧮 Cálculos ${prefix} OK | Usando: ${campoDivisor}`, "color: #3b82f6; font-size: 10px; font-weight: bold;");
+        } else {
+            // Inicializar en 0 si no se cumplen las condiciones para evitar valores nulos en la DB
+            payload[`${prefix}TASAREF`] = 0;
+            payload[`${prefix}MONTOML2`] = 0;
+            console.warn(`%c⚠️ No se pudo calcular TASAREF para ${prefix} (Divisor ${campoDivisor} inválido)`, "color: #f59e0b; font-size: 10px;");
+        }
 
         // --- 4. VALIDACIONES DE NEGOCIO ---
         const tablePrefix = currentTableName.split('_')[0].toUpperCase();
@@ -3387,108 +3410,108 @@ console.table("✅ RESPUESTA DEL SERVIDOR (RESULTADO):", createdRecord);
         input.click();
     }
 
-async function processAndShowModalHCM(file) {
-    try {
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        let fullText = "";
+    async function processAndShowModalHCM(file) {
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            let fullText = "";
 
-        for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const textContent = await page.getTextContent();
-            fullText += textContent.items.map(item => item.str).join(" ") + " ";
-        }
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                fullText += textContent.items.map(item => item.str).join(" ") + " ";
+            }
 
-        const bloqueFactura = extractRaw(fullText, /NOTAS ADICIONALES([\s\S]*?)se firma en:/);
+            const bloqueFactura = extractRaw(fullText, /NOTAS ADICIONALES([\s\S]*?)se firma en:/);
 
-        const registroPdf = {
-            "TD101ID": "NUEVO_PDF",
-            "TD101POLIZA": extractRaw(fullText, /(\d+\s*-\s*\d+\s*-\s*\d+)/),
-            "TD101FECHAHEADER": extractRaw(fullText, /(\d{2}\/\d{2}\/\d{4})\s*Póliza Nro\./),
-            "TD101EMPRESA": extractRaw(bloqueFactura, /C\.I\. \/ R\.I\.F\. No\.:\s*([\s\S]*?)\s*Por Mercantil Seguros/i),
-            "TD101RIF": extractRaw(bloqueFactura, /([JVEG]-[\d-]+)/),
-            "TD101FRECUENCIA": "MENSUAL",
-            "TD101MONEDA": "USD",
-            "TD101FACTURA": extractRaw(bloqueFactura, /Factura Nº:\s*(\d+)/),
-            "TD101FECHAEMISION": extractRaw(bloqueFactura, /Fecha de Emisión:\s*(\d{2}\/\d{2}\/\d{4})/),
-            "TD101PERIODOFACT": extractRaw(bloqueFactura, /Desde \(dd\/mm\/aaaa\):\s*(\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4})/)
-                                .trim().replace(/\s+/, " al "),
-            "TD101MOVIMIENTO": extractRaw(bloqueFactura, /Tipo de Movimiento:\s*([\s\S]*?)\s*DATOS DE LA FACTURA/),
-            "TD101MONTOPRIMA": extractRaw(bloqueFactura, /Total Prima Bruta:\s*(-?[\d.,]+)/),
-            "TD101MONTOIGTF": extractRaw(bloqueFactura, /0,00\s+(-?[\d.,]+)\s+PAGO DIRECTO/),
-            "TD101MONTOTOTAL": extractRaw(bloqueFactura, /Total a Pagar:\s*(-?[\d.,]+)/),
-            "TD101ARCHIVO": file.name 
-        };
-
-        // --- LÓGICA DE VALIDACIÓN DE DUPLICADOS ---
-        // (Se mantiene igual que en tu código original...)
-        const sourceData = (typeof TABLE_CACHE !== 'undefined' && TABLE_CACHE.data) 
-                            ? TABLE_CACHE.data 
-                            : (typeof originalData !== 'undefined' ? originalData : []);
-
-        if (sourceData.length > 0) {
-            const cleanM = (val) => String(val || "").replace(/[.,\s]/g, "");
-            const toCompareDate = (val) => {
-                if (!val) return "";
-                let s = String(val).trim();
-                if (s.includes("/")) {
-                    const parts = s.split("/");
-                    if (parts.length === 3) return `${parts[2]}-${parts[1]}-${parts[0]}`;
-                }
-                if (s.includes("-") && s.includes("T")) return s.substring(0, 10);
-                return s;
+            const registroPdf = {
+                "TD101ID": "NUEVO_PDF",
+                "TD101POLIZA": extractRaw(fullText, /(\d+\s*-\s*\d+\s*-\s*\d+)/),
+                "TD101FECHAHEADER": extractRaw(fullText, /(\d{2}\/\d{2}\/\d{4})\s*Póliza Nro\./),
+                "TD101EMPRESA": extractRaw(bloqueFactura, /C\.I\. \/ R\.I\.F\. No\.:\s*([\s\S]*?)\s*Por Mercantil Seguros/i),
+                "TD101RIF": extractRaw(bloqueFactura, /([JVEG]-[\d-]+)/),
+                "TD101FRECUENCIA": "MENSUAL",
+                "TD101MONEDA": "USD",
+                "TD101FACTURA": extractRaw(bloqueFactura, /Factura Nº:\s*(\d+)/),
+                "TD101FECHAEMISION": extractRaw(bloqueFactura, /Fecha de Emisión:\s*(\d{2}\/\d{2}\/\d{4})/),
+                "TD101PERIODOFACT": extractRaw(bloqueFactura, /Desde \(dd\/mm\/aaaa\):\s*(\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4})/)
+                                    .trim().replace(/\s+/, " al "),
+                "TD101MOVIMIENTO": extractRaw(bloqueFactura, /Tipo de Movimiento:\s*([\s\S]*?)\s*DATOS DE LA FACTURA/),
+                "TD101MONTOPRIMA": extractRaw(bloqueFactura, /Total Prima Bruta:\s*(-?[\d.,]+)/),
+                "TD101MONTOIGTF": extractRaw(bloqueFactura, /0,00\s+(-?[\d.,]+)\s+PAGO DIRECTO/),
+                "TD101MONTOTOTAL": extractRaw(bloqueFactura, /Total a Pagar:\s*(-?[\d.,]+)/),
+                "TD101ARCHIVO": file.name 
             };
 
-            const nuevoP = String(registroPdf.TD101POLIZA || "").trim().toUpperCase();
-            const nuevoF = toCompareDate(registroPdf.TD101FECHAEMISION);
-            const nuevoM = cleanM(registroPdf.TD101MONTOTOTAL);
-            const nuevoFX = cleanM(registroPdf.TD101FACTURA);
+            // --- LÓGICA DE VALIDACIÓN DE DUPLICADOS ---
+            // (Se mantiene igual que en tu código original...)
+            const sourceData = (typeof TABLE_CACHE !== 'undefined' && TABLE_CACHE.data) 
+                                ? TABLE_CACHE.data 
+                                : (typeof originalData !== 'undefined' ? originalData : []);
 
-            const esDuplicado = sourceData.some((row) => {
-                const filaP = String(row.TD101POLIZA || "").trim().toUpperCase();
-                const filaF = toCompareDate(row.TD101FECHAEMISION);
-                const filaM = cleanM(row.TD101MONTOTOTAL);
-                const filaFX = cleanM(row.TD101FACTURA);
-                return (filaP === nuevoP && filaF === nuevoF && filaM === nuevoM && filaFX === nuevoFX);
-            });
+            if (sourceData.length > 0) {
+                const cleanM = (val) => String(val || "").replace(/[.,\s]/g, "");
+                const toCompareDate = (val) => {
+                    if (!val) return "";
+                    let s = String(val).trim();
+                    if (s.includes("/")) {
+                        const parts = s.split("/");
+                        if (parts.length === 3) return `${parts[2]}-${parts[1]}-${parts[0]}`;
+                    }
+                    if (s.includes("-") && s.includes("T")) return s.substring(0, 10);
+                    return s;
+                };
 
-            if (esDuplicado) {
-                const msg = `<b>¡POSIBLE DUPLICADO DETECTADO!</b><br><br>` +
-                            `<div class="text-left inline-block">` +
-                                `• <b>Póliza:</b> ${nuevoP}<br>` +
-                                `• <b>Recibo:</b> ${registroPdf.TD101FACTURA}<br>` +
-                                `• <b>Fecha:</b> ${registroPdf.TD101FECHAEMISION}<br>` +
-                                `• <b>Monto Total:</b> ${registroPdf.TD101MONTOTOTAL}` +
-                            `</div><br><br>¿Desea abrir el modal y procesarlo de todos modos?`;
-                
-                const continuar = await showSystemModal({ title: 'Error de Duplicidad', text: msg, type: 'warning', showCancel: true });
-                if (!continuar) return;
-            }
-        }
+                const nuevoP = String(registroPdf.TD101POLIZA || "").trim().toUpperCase();
+                const nuevoF = toCompareDate(registroPdf.TD101FECHAEMISION);
+                const nuevoM = cleanM(registroPdf.TD101MONTOTOTAL);
+                const nuevoFX = cleanM(registroPdf.TD101FACTURA);
 
-        // --- NORMALIZACIÓN PARA INPUTS DATE ANTES DE RENDER ---
-        // Convertimos DD/MM/YYYY a YYYY-MM-DD solo para las llaves que contienen FECHA, DATE o VIGENCIA
-        Object.keys(registroPdf).forEach(key => {
-            const k = key.toUpperCase();
-            if (k.includes('FECHA') || k.includes('DATE') || k.includes('VIGENCIA')) {
-                const val = registroPdf[key];
-                if (val && val.includes('/')) {
-                    const p = val.split('/');
-                    if (p.length === 3) registroPdf[key] = `${p[2]}-${p[1]}-${p[0]}`;
+                const esDuplicado = sourceData.some((row) => {
+                    const filaP = String(row.TD101POLIZA || "").trim().toUpperCase();
+                    const filaF = toCompareDate(row.TD101FECHAEMISION);
+                    const filaM = cleanM(row.TD101MONTOTOTAL);
+                    const filaFX = cleanM(row.TD101FACTURA);
+                    return (filaP === nuevoP && filaF === nuevoF && filaM === nuevoM && filaFX === nuevoFX);
+                });
+
+                if (esDuplicado) {
+                    const msg = `<b>¡POSIBLE DUPLICADO DETECTADO!</b><br><br>` +
+                                `<div class="text-left inline-block">` +
+                                    `• <b>Póliza:</b> ${nuevoP}<br>` +
+                                    `• <b>Recibo:</b> ${registroPdf.TD101FACTURA}<br>` +
+                                    `• <b>Fecha:</b> ${registroPdf.TD101FECHAEMISION}<br>` +
+                                    `• <b>Monto Total:</b> ${registroPdf.TD101MONTOTOTAL}` +
+                                `</div><br><br>¿Desea abrir el modal y procesarlo de todos modos?`;
+                    
+                    const continuar = await showSystemModal({ title: 'Error de Duplicidad', text: msg, type: 'warning', showCancel: true });
+                    if (!continuar) return;
                 }
             }
-        });
-            
-        localStorage.setItem('DATA_PDF', JSON.stringify(registroPdf));
-        renderPdfAsEditable(registroPdf);
 
-    } catch (error) {
-        console.error("Error crítico:", error);
-        await showSystemModal({ title: 'Error', text: 'No se pudo leer el PDF.', type: 'danger' });
+            // --- NORMALIZACIÓN PARA INPUTS DATE ANTES DE RENDER ---
+            // Convertimos DD/MM/YYYY a YYYY-MM-DD solo para las llaves que contienen FECHA, DATE o VIGENCIA
+            Object.keys(registroPdf).forEach(key => {
+                const k = key.toUpperCase();
+                if (k.includes('FECHA') || k.includes('DATE') || k.includes('VIGENCIA')) {
+                    const val = registroPdf[key];
+                    if (val && val.includes('/')) {
+                        const p = val.split('/');
+                        if (p.length === 3) registroPdf[key] = `${p[2]}-${p[1]}-${p[0]}`;
+                    }
+                }
+            });
+                
+            localStorage.setItem('DATA_PDF', JSON.stringify(registroPdf));
+            renderPdfAsEditable(registroPdf);
+
+        } catch (error) {
+            console.error("Error crítico:", error);
+            await showSystemModal({ title: 'Error', text: 'No se pudo leer el PDF.', type: 'danger' });
+        }
     }
-}
 
-async function processAndShowModalSMED(file) {
+    async function processAndShowModalSMED(file) {
         try {
             const arrayBuffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -3623,149 +3646,155 @@ async function processAndShowModalSMED(file) {
         }
     }
 
-    async function generarYVincularPdf() {
-        // Llamada a tu función de GAS
-        const nombrePdfGenerado = await runGoogleScript('registroPdf', [datosActuales]);
+async function generarYVincularPdf() {
+    const nombrePdfGenerado = await runGoogleScript('registroPdf', [datosActuales]);
 
-        if (nombrePdfGenerado) {
-            // Buscamos el input del campo TD101ARCHIVO
-            const inputArchivo = document.querySelector('[data-field="TD101ARCHIVO"]');
-            
-            if (inputArchivo) {
-                inputArchivo.value = nombrePdfGenerado;
-                // Si quieres guardarlo de una vez en el payload de saveRecord:
-                payload['TD101ARCHIVO'] = nombrePdfGenerado;
-            }
-            
-            console.log("Archivo vinculado: " + nombrePdfGenerado);
-        }
-    }
-
-function renderPdfAsEditable(row) {
-    normalizeToolbar();
-    ['Duplicar', 'Borrar', 'Nuevo', 'Editar'].forEach(disableButton);
-    
-    document.getElementById('btn-modal-save')?.classList.remove('hidden');
-    document.getElementById('btn-modal-cancel')?.classList.remove('hidden');
-    document.getElementById('btn-modal-return')?.classList.add('hidden');
-
-    const btnCancel = document.getElementById('btn-modal-cancel');
-    if (btnCancel) {
-        btnCancel.onclick = () => {
-            cancelActualForm(); 
-        };
-    }
-
-    const firstKey = Object.keys(row)[0] || "";
-    const tablePrefix = firstKey.substring(0, 5).toUpperCase();
-    const idFieldName = tablePrefix + "ID";
-    
-    window.currentTableName = tablePrefix + "_MAIN";
-
-    const content = document.getElementById('detail-modal-content');
-    const title = document.getElementById('detail-modal-title');
-    const configMapRaw = JSON.parse(localStorage.getItem('TABLE_CONFIG') || '{}');
-    const configMap = {};
-    Object.keys(configMapRaw).forEach(k => configMap[k.toUpperCase()] = configMapRaw[k]);
-
-    content.innerHTML = '';
-    title.innerHTML = `
-        <div class="flex items-center justify-end w-full px-2 py-1">
-            <div class="flex items-center gap-2">
-                <span id="title-badge-mode" class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-500/20 text-blue-400 border border-blue-500/30">
-                    BORRADOR (${tablePrefix === 'TD101' ? 'HCM' : 'SMED'})
-                </span>
-                <i data-lucide="file-text" class="w-5 h-5 text-blue-400"></i>
-            </div>
-        </div>`;
-
-    const ERROR_CLASSES = ["border-red-600", "text-yellow-500", "ring-1", "ring-red-600/50"];
-    const NORMAL_CLASSES = ["border-transparent", "text-gray-100"];
-
-    Object.keys(row).forEach(key => {
-        const cleanKey = key.toUpperCase();
-        if (cleanKey.includes('REGISTRO') || cleanKey === idFieldName) return;
+    if (nombrePdfGenerado) {
+        // Buscamos cualquier input que termine en "ARCHIVO" dentro del modal
+        // El selector [data-field$="ARCHIVO"] busca campos que TERMINEN con esa palabra
+        const inputArchivo = document.querySelector('[data-field$="ARCHIVO"]');
         
-        const cfg = configMap[cleanKey] || {};
-        const visValue = String(cfg.visible || '').toLowerCase().trim();
-        if (visValue === "") return;
-
-        const isEditable = visValue === 'x' && cfg.editable !== false && cfg.Es_Calculado !== true;
-        const isRequired = cfg.Es_Obligatorio === true || String(cfg.Es_Obligatorio).toLowerCase() === "true";
-        const asterisco = isRequired ? '<span class="text-red-500 ml-1 font-bold">*</span>' : '';
-
-        // --- DETECCIÓN DE TIPOS DE CAMPO ---
-        // Excluimos PERIODOFACT de ser tipo date porque contiene texto (" al ")
-        const isDateField = (cleanKey.includes('FECHA') || cleanKey.includes('DATE') || cleanKey.endsWith('PERIODO') || cleanKey.includes('VIGENCIA') || cleanKey.includes('EMISION')) 
-                            && !cleanKey.includes('PERIODOFACT');
-        
-        const isNumericField = cleanKey.includes('MONTO') || cleanKey.includes('PRIMA') || cleanKey.includes('IMPUESTO') || cleanKey.includes('BRUTO');
-
-        const item = document.createElement('div');
-        item.className = 'grid grid-cols-[110px_1fr] px-2 py-1 border-b border-gray-800/50 last:border-0 hover:bg-white/5 justify-items-start';
-        
-        const val = row[key] || '';
-        const esError = String(val).toUpperCase() === "NO DETECTADO";
-        
-        if (isEditable) {
-            const tempDiv = document.createElement('div');
-            tempDiv.className = "w-full";
+        if (inputArchivo) {
+            const fieldName = inputArchivo.dataset.field; // Detecta si es TD101 o TD201
+            inputArchivo.value = nombrePdfGenerado;
             
-            const inputEl = document.createElement('input');
-            inputEl.dataset.field = key;
+            // Guardamos en el payload usando el nombre de campo que detectamos en el DOM
+            payload[fieldName] = nombrePdfGenerado;
             
-            // 1. Configurar TIPO
-            inputEl.type = isDateField ? 'date' : 'text';
-
-            // 2. Configurar VALOR (Si es date, convertir DD/MM/YYYY a YYYY-MM-DD)
-            if (isDateField && val.includes('/')) {
-                inputEl.value = val.split('/').reverse().join('-');
-            } else {
-                inputEl.value = val;
-            }
-
-            // 3. Configurar ESTILOS
-            inputEl.className = `bg-gray-800/50 border rounded px-2 py-0 text-sm font-bold w-full focus:outline-none transition-all duration-200 ${esError ? ERROR_CLASSES.join(' ') : NORMAL_CLASSES.join(' ')}`;
-            
-            if (isNumericField) {
-                inputEl.classList.add('text-right');
-            } else if (!isDateField) {
-                inputEl.classList.add('uppercase');
-            }
-
-            // 4. EVENTOS
-            inputEl.addEventListener('input', function() {
-                // Limpieza de error visual
-                if (this.value !== "" && this.value.toUpperCase() !== "NO DETECTADO") {
-                    this.classList.remove(...ERROR_CLASSES);
-                    this.classList.add(...NORMAL_CLASSES);
-                }
-                // Máscara contable si aplica
-                if (isNumericField) applyAccountingMask(this);
-            });
-
-            tempDiv.appendChild(inputEl);
-            item.appendChild(tempDiv);
+            console.log(`Vínculo exitoso en campo: ${fieldName}`);
         } else {
-            // Modo Lectura (Bloqueado)
-            const wrapper = document.createElement('div');
-            wrapper.className = "w-full";
-            wrapper.innerHTML = `
-                <div class="flex items-center h-[24px] px-2 w-full justify-between">
-                    <span class="text-sm font-bold uppercase ${esError ? 'text-yellow-500' : 'text-gray-500'} opacity-90">${val}</span>
-                    <input type="hidden" data-field="${key}" value="${val}">
-                    <i data-lucide="lock" class="w-3.5 h-3.5 text-gray-700"></i>
-                </div>`;
-            item.appendChild(wrapper);
+            // Si no encuentra el input por nombre, lo metemos al payload por la vía dinámica
+            const prefix = Object.keys(datosActuales)[0].substring(0, 5);
+            payload[`${prefix}ARCHIVO`] = nombrePdfGenerado;
+        }
+    }
+}
+
+    function renderPdfAsEditable(row) {
+        normalizeToolbar();
+        ['Duplicar', 'Borrar', 'Nuevo', 'Editar'].forEach(disableButton);
+        
+        document.getElementById('btn-modal-save')?.classList.remove('hidden');
+        document.getElementById('btn-modal-cancel')?.classList.remove('hidden');
+        document.getElementById('btn-modal-return')?.classList.add('hidden');
+
+        const btnCancel = document.getElementById('btn-modal-cancel');
+        if (btnCancel) {
+            btnCancel.onclick = () => {
+                cancelActualForm(); 
+            };
         }
 
-        item.insertAdjacentHTML('afterbegin', `<span class="text-gray-400 font-medium uppercase text-[10px] self-start flex items-center">${cfg.label || key}${asterisco}</span>`);
-        content.appendChild(item);
-    });
+        const firstKey = Object.keys(row)[0] || "";
+        const tablePrefix = firstKey.substring(0, 5).toUpperCase();
+        const idFieldName = tablePrefix + "ID";
+        
+        window.currentTableName = tablePrefix + "_MAIN";
 
-    document.getElementById('detail-modal').classList.remove('hidden');
-    if (window.lucide) lucide.createIcons();
-}
+        const content = document.getElementById('detail-modal-content');
+        const title = document.getElementById('detail-modal-title');
+        const configMapRaw = JSON.parse(localStorage.getItem('TABLE_CONFIG') || '{}');
+        const configMap = {};
+        Object.keys(configMapRaw).forEach(k => configMap[k.toUpperCase()] = configMapRaw[k]);
+
+        content.innerHTML = '';
+        title.innerHTML = `
+            <div class="flex items-center justify-end w-full px-2 py-1">
+                <div class="flex items-center gap-2">
+                    <span id="title-badge-mode" class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                        BORRADOR (${tablePrefix === 'TD101' ? 'HCM' : 'SMED'})
+                    </span>
+                    <i data-lucide="file-text" class="w-5 h-5 text-blue-400"></i>
+                </div>
+            </div>`;
+
+        const ERROR_CLASSES = ["border-red-600", "text-yellow-500", "ring-1", "ring-red-600/50"];
+        const NORMAL_CLASSES = ["border-transparent", "text-gray-100"];
+
+        Object.keys(row).forEach(key => {
+            const cleanKey = key.toUpperCase();
+            if (cleanKey.includes('REGISTRO') || cleanKey === idFieldName) return;
+            
+            const cfg = configMap[cleanKey] || {};
+            const visValue = String(cfg.visible || '').toLowerCase().trim();
+            if (visValue === "") return;
+
+            const isEditable = visValue === 'x' && cfg.editable !== false && cfg.Es_Calculado !== true;
+            const isRequired = cfg.Es_Obligatorio === true || String(cfg.Es_Obligatorio).toLowerCase() === "true";
+            const asterisco = isRequired ? '<span class="text-red-500 ml-1 font-bold">*</span>' : '';
+
+            // --- DETECCIÓN DE TIPOS DE CAMPO ---
+            // Excluimos PERIODOFACT de ser tipo date porque contiene texto (" al ")
+            const isDateField = (cleanKey.includes('FECHA') || cleanKey.includes('DATE') || cleanKey.endsWith('PERIODO') || cleanKey.includes('VIGENCIA') || cleanKey.includes('EMISION')) 
+                                && !cleanKey.includes('PERIODOFACT');
+            
+            const isNumericField = cleanKey.includes('MONTO') || cleanKey.includes('PRIMA') || cleanKey.includes('IMPUESTO') || cleanKey.includes('BRUTO');
+
+            const item = document.createElement('div');
+            item.className = 'grid grid-cols-[110px_1fr] px-2 py-1 border-b border-gray-800/50 last:border-0 hover:bg-white/5 justify-items-start';
+            
+            const val = row[key] || '';
+            const esError = String(val).toUpperCase() === "NO DETECTADO";
+            
+            if (isEditable) {
+                const tempDiv = document.createElement('div');
+                tempDiv.className = "w-full";
+                
+                const inputEl = document.createElement('input');
+                inputEl.dataset.field = key;
+                
+                // 1. Configurar TIPO
+                inputEl.type = isDateField ? 'date' : 'text';
+
+                // 2. Configurar VALOR (Si es date, convertir DD/MM/YYYY a YYYY-MM-DD)
+                if (isDateField && val.includes('/')) {
+                    inputEl.value = val.split('/').reverse().join('-');
+                } else {
+                    inputEl.value = val;
+                }
+
+                // 3. Configurar ESTILOS
+                inputEl.className = `bg-gray-800/50 border rounded px-2 py-0 text-sm font-bold w-full focus:outline-none transition-all duration-200 ${esError ? ERROR_CLASSES.join(' ') : NORMAL_CLASSES.join(' ')}`;
+                
+                if (isNumericField) {
+                    inputEl.classList.add('text-right');
+                } else if (!isDateField) {
+                    inputEl.classList.add('uppercase');
+                }
+
+                // 4. EVENTOS
+                inputEl.addEventListener('input', function() {
+                    // Limpieza de error visual
+                    if (this.value !== "" && this.value.toUpperCase() !== "NO DETECTADO") {
+                        this.classList.remove(...ERROR_CLASSES);
+                        this.classList.add(...NORMAL_CLASSES);
+                    }
+                    // Máscara contable si aplica
+                    if (isNumericField) applyAccountingMask(this);
+                });
+
+                tempDiv.appendChild(inputEl);
+                item.appendChild(tempDiv);
+            } else {
+                // Modo Lectura (Bloqueado)
+                const wrapper = document.createElement('div');
+                wrapper.className = "w-full";
+                wrapper.innerHTML = `
+                    <div class="flex items-center h-[24px] px-2 w-full justify-between">
+                        <span class="text-sm font-bold uppercase ${esError ? 'text-yellow-500' : 'text-gray-500'} opacity-90">${val}</span>
+                        <input type="hidden" data-field="${key}" value="${val}">
+                        <i data-lucide="lock" class="w-3.5 h-3.5 text-gray-700"></i>
+                    </div>`;
+                item.appendChild(wrapper);
+            }
+
+            item.insertAdjacentHTML('afterbegin', `<span class="text-gray-400 font-medium uppercase text-[10px] self-start flex items-center">${cfg.label || key}${asterisco}</span>`);
+            content.appendChild(item);
+        });
+
+        document.getElementById('detail-modal').classList.remove('hidden');
+        if (window.lucide) lucide.createIcons();
+    }
 
     function exportCurrentTableToExcel() {
         try {
@@ -3799,7 +3828,7 @@ function renderPdfAsEditable(row) {
                     let val = row[h];
 
                     // A. Formateo de Fecha (DD/MM/YYYY)
-                    if (cleanH.includes('FECHA') || cleanH.includes('DATE') || cleanKey.endsWith('PERIODO')) {
+                    if (cleanH.includes('FECHA') || cleanH.includes('DATE') || cleanH.endsWith('PERIODO')) {
                         const d = new Date(row[h]);
                         if (!isNaN(d.getTime())) {
                             val = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
@@ -3827,14 +3856,23 @@ function renderPdfAsEditable(row) {
             }));
             ws['!cols'] = colWidths;
 
-            // 5. Nombre del archivo
-            const tableName = (typeof currentTableName !== 'undefined' ? currentTableName : "REPORTE").replace("_MAIN", "");
-            const fileName = `${tableName}_${new Date().toISOString().slice(0,10)}.xlsx`;
+            // 5. Nombre del archivo: Tabla_YYYYMMDDHHMMSS
+            const now = new Date();
+            const timestamp = now.getFullYear().toString() +
+                              (now.getMonth() + 1).toString().padStart(2, '0') +
+                              now.getDate().toString().padStart(2, '0') +
+                              now.getHours().toString().padStart(2, '0') +
+                              now.getMinutes().toString().padStart(2, '0') +
+                              now.getSeconds().toString().padStart(2, '0');
 
-            XLSX.utils.book_append_sheet(wb, ws, "Datos Formateados");
+            const tableName = (typeof currentTableName !== 'undefined' ? currentTableName : "REPORTE").replace("_MAIN", "");
+            const fileName = `${tableName}_${timestamp}.xlsx`;
+
+            // 6. Finalizar y Guardar
+            XLSX.utils.book_append_sheet(wb, ws, "Datos");
             XLSX.writeFile(wb, fileName);
 
-            console.log(`%c✅ Exportación con formato completada: ${fileName}`, "color: #10b981; font-weight: bold;");
+            console.log(`%c✅ Exportación limpia: ${fileName}`, "color: #10b981; font-weight: bold;");
 
         } catch (error) {
             console.error("Error en exportación formateada:", error);
@@ -3853,7 +3891,7 @@ function renderPdfAsEditable(row) {
         if (!btnNew) return;
 
         // 1. Configuramos el comportamiento según la tabla actual
-        if (currentTableName === 'TD101_MAIN') {
+        if (currentTableName === 'TD101_MAIN' || currentTableName === 'TD201_MAIN') {
             btnNew.title = "Nuevo desde PDF";
             btnNew.innerHTML = `<i data-lucide="file-plus-2" class="w-6 h-6"></i>`;
             btnNew.onclick = (e) => {
